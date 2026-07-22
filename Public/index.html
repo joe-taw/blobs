@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Blobs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+  :root{
+    --bg:#14152B;
+    --surface:#1E2040;
+    --surface2:#262A4D;
+    --lime:#C4F135;
+    --coral:#FF6B6B;
+    --peri:#8093F1;
+    --cream:#F5F3EE;
+    --muted:#9294B8;
+    --radius:22px;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(ellipse 900px 600px at 15% -10%, rgba(196,241,53,0.10), transparent 60%),
+      radial-gradient(ellipse 900px 700px at 110% 10%, rgba(255,107,107,0.12), transparent 60%),
+      var(--bg);
+    color:var(--cream);
+    font-family:'Inter',sans-serif;
+    min-height:100vh;
+  }
+  h1,h2,h3,.display{ font-family:'Baloo 2',cursive; }
+  ::selection{ background:var(--lime); color:#14152B; }
+
+  /* ---------- Blob decorations ---------- */
+  .blob-svg{ position:fixed; z-index:0; opacity:0.55; filter:blur(1px); pointer-events:none; }
+
+  /* ---------- Screens ---------- */
+  .screen{ position:relative; z-index:1; max-width:1100px; margin:0 auto; padding:32px 20px 80px; }
+  .center-card{
+    max-width:440px; margin:8vh auto 0; background:var(--surface);
+    border-radius:var(--radius); padding:36px 30px; box-shadow:0 20px 60px rgba(0,0,0,0.4);
+    border:1px solid rgba(255,255,255,0.06);
+  }
+  .logo{ text-align:center; margin-bottom:6px; }
+  .logo .glyph{ display:inline-block; width:64px; height:64px; margin-bottom:8px; }
+  .logo h1{ font-size:44px; margin:0; font-weight:800; letter-spacing:-0.5px;
+    background:linear-gradient(120deg, var(--lime), var(--peri) 70%);
+    -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .tagline{ text-align:center; color:var(--muted); margin:0 0 28px; font-size:14px; }
+
+  label{ display:block; font-size:13px; color:var(--muted); margin:16px 0 6px; font-weight:600; }
+  input[type=text]{
+    width:100%; padding:13px 14px; border-radius:14px; border:1.5px solid rgba(255,255,255,0.08);
+    background:var(--surface2); color:var(--cream); font-size:16px; font-family:'Inter',sans-serif;
+  }
+  input[type=text]:focus{ outline:none; border-color:var(--lime); }
+  input[type=text]::placeholder{ color:#5c5f82; }
+
+  button{ font-family:'Inter',sans-serif; cursor:pointer; border:none; }
+  .btn-primary{
+    width:100%; margin-top:22px; padding:14px; border-radius:14px; font-weight:700; font-size:16px;
+    background:var(--lime); color:#14152B; transition:transform .12s ease, box-shadow .12s ease;
+  }
+  .btn-primary:hover{ transform:translateY(-1px); box-shadow:0 8px 20px rgba(196,241,53,0.25); }
+  .btn-primary:disabled{ opacity:0.4; cursor:not-allowed; transform:none; box-shadow:none; }
+  .btn-secondary{
+    width:100%; margin-top:10px; padding:12px; border-radius:14px; font-weight:600; font-size:14px;
+    background:transparent; color:var(--muted); border:1.5px solid rgba(255,255,255,0.1);
+  }
+  .divider{ display:flex; align-items:center; gap:12px; margin:24px 0 6px; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:1px;}
+  .divider::before,.divider::after{ content:''; flex:1; height:1px; background:rgba(255,255,255,0.08); }
+  .error-box{ background:rgba(255,107,107,0.14); border:1px solid rgba(255,107,107,0.4); color:#ffb3b3;
+    padding:10px 14px; border-radius:12px; font-size:13px; margin-top:16px; display:none; }
+
+  /* ---------- Lobby (in-room) ---------- */
+  .room-code-pill{
+    display:inline-flex; align-items:center; gap:10px; background:var(--surface2);
+    padding:8px 16px; border-radius:999px; font-family:'Baloo 2'; font-size:20px; letter-spacing:3px;
+    border:1.5px dashed var(--peri);
+  }
+  .player-chip-list{ display:flex; flex-wrap:wrap; gap:10px; margin-top:20px; }
+  .player-chip{
+    background:var(--surface2); padding:10px 16px; border-radius:14px; font-weight:600; font-size:14px;
+    display:flex; align-items:center; gap:8px; border:1px solid rgba(255,255,255,0.06);
+  }
+  .dot{ width:8px; height:8px; border-radius:50%; background:var(--lime); }
+  .dot.off{ background:#555; }
+  .crown{ color:var(--lime); font-size:12px; }
+
+  /* ---------- Game board ---------- */
+  .topbar{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:18px;}
+  .round-badge{
+    background:var(--surface); border-radius:16px; padding:10px 18px; display:flex; gap:18px; align-items:center;
+    border:1px solid rgba(255,255,255,0.06);
+  }
+  .round-badge .num{ font-family:'Baloo 2'; font-size:26px; font-weight:800; color:var(--lime); }
+  .round-badge .lbl{ font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; }
+  .trump-pill{
+    padding:8px 16px; border-radius:999px; font-weight:700; font-size:14px; display:flex; align-items:center; gap:8px;
+  }
+  .trump-pill.red{ background:rgba(255,107,107,0.18); color:#ffb3b3; border:1px solid rgba(255,107,107,0.4);}
+  .trump-pill.black{ background:rgba(128,147,241,0.18); color:#c3cdff; border:1px solid rgba(128,147,241,0.4);}
+  .trump-pill.none{ background:rgba(196,241,53,0.14); color:var(--lime); border:1px solid rgba(196,241,53,0.4);}
+
+  .board{ display:grid; grid-template-columns:1fr 260px; gap:20px; }
+  @media (max-width:820px){ .board{ grid-template-columns:1fr; } }
+
+  .table-area{
+    position:relative; background:var(--surface); border-radius:28px; padding:26px;
+    border:1px solid rgba(255,255,255,0.06); min-height:420px; display:flex; flex-direction:column;
+  }
+
+  .seats{ display:flex; flex-wrap:wrap; gap:10px; justify-content:center; margin-bottom:18px; }
+  .seat{
+    background:var(--surface2); border-radius:16px; padding:10px 14px; min-width:120px; text-align:center;
+    border:2px solid transparent; position:relative;
+  }
+  .seat.active-turn{ border-color:var(--lime); box-shadow:0 0 0 4px rgba(196,241,53,0.12); }
+  .seat.dealer::after{ content:'D'; position:absolute; top:-8px; right:-8px; background:var(--peri); color:#14152B;
+    width:20px; height:20px; border-radius:50%; font-size:11px; font-weight:800; display:flex; align-items:center; justify-content:center; }
+  .seat .name{ font-weight:700; font-size:13px; }
+  .seat .meta{ font-size:11px; color:var(--muted); margin-top:4px; display:flex; gap:8px; justify-content:center; }
+  .seat .bid-num{ color:var(--lime); font-weight:800; }
+
+  .trick-blob-wrap{ flex:1; display:flex; align-items:center; justify-content:center; position:relative; min-height:200px; }
+  .trick-blob{ position:absolute; width:280px; height:220px; opacity:0.5; animation:breathe 5s ease-in-out infinite; }
+  @keyframes breathe{ 0%,100%{ transform:scale(1) rotate(0deg);} 50%{ transform:scale(1.06) rotate(3deg);} }
+  .trick-cards{ display:flex; gap:-10px; position:relative; z-index:1; flex-wrap:wrap; justify-content:center; }
+
+  .card{
+    width:58px; height:82px; border-radius:10px; background:var(--cream); color:#1a1a2e;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    font-weight:800; font-size:20px; box-shadow:0 6px 14px rgba(0,0,0,0.35); position:relative;
+    font-family:'Inter',sans-serif; margin-left:-14px; transition:transform .15s ease;
+  }
+  .card:first-child{ margin-left:0; }
+  .card.red{ color:#d1425a; }
+  .card .suit-sym{ font-size:16px; margin-top:-2px; }
+  .trick-player-label{ font-size:10px; text-align:center; color:var(--muted); margin-top:4px; }
+  .trick-card-col{ display:flex; flex-direction:column; align-items:center; }
+
+  .hand-row{ display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-top:18px; }
+  .hand-card{ cursor:pointer; }
+  .hand-card:hover{ transform:translateY(-8px); }
+  .hand-card.disabled{ opacity:0.35; cursor:not-allowed; }
+  .hand-card.disabled:hover{ transform:none; }
+
+  .status-line{ text-align:center; color:var(--muted); font-size:13px; margin-top:14px; min-height:18px; }
+  .status-line.mine{ color:var(--lime); font-weight:700; }
+
+  .bid-controls{ display:flex; gap:8px; justify-content:center; margin-top:16px; flex-wrap:wrap; }
+  .bid-btn{
+    width:44px; height:44px; border-radius:12px; background:var(--surface2); color:var(--cream);
+    font-weight:800; font-size:16px; border:1.5px solid rgba(255,255,255,0.08);
+  }
+  .bid-btn:hover:not(:disabled){ border-color:var(--lime); }
+  .bid-btn:disabled{ opacity:0.25; cursor:not-allowed; }
+
+  /* ---------- Sidebar ---------- */
+  .sidebar{ display:flex; flex-direction:column; gap:14px; }
+  .panel{ background:var(--surface); border-radius:20px; padding:16px 18px; border:1px solid rgba(255,255,255,0.06); }
+  .panel h3{ margin:0 0 10px; font-size:14px; text-transform:uppercase; letter-spacing:1px; color:var(--muted); font-family:'Inter'; font-weight:700; }
+  .score-row{ display:flex; justify-content:space-between; align-items:center; padding:6px 0; font-size:14px; }
+  .score-row .val{ font-family:'Baloo 2'; font-weight:800; color:var(--lime); }
+  .log-panel{ max-height:220px; overflow-y:auto; font-size:12.5px; color:var(--muted); line-height:1.6; }
+  .log-panel div:last-child{ color:var(--cream); }
+
+  /* ---------- Round end modal ---------- */
+  .modal-backdrop{ position:fixed; inset:0; background:rgba(10,10,22,0.7); backdrop-filter:blur(4px);
+    display:flex; align-items:center; justify-content:center; z-index:50; padding:20px; }
+  .modal{ background:var(--surface); border-radius:24px; padding:30px; max-width:480px; width:100%; border:1px solid rgba(255,255,255,0.08); }
+  .summary-row{ display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid rgba(255,255,255,0.06); font-size:14px; }
+  .summary-row:last-child{ border-bottom:none; }
+  .hit{ color:var(--lime); font-weight:700; }
+  .miss{ color:var(--coral); font-weight:700; }
+
+  .hidden{ display:none !important; }
+</style>
+</head>
+<body>
+
+<svg class="blob-svg" style="top:-120px; left:-140px; width:420px;" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <path fill="#8093F1" d="M45,-58C58,-49,68,-33,71,-16C74,1,70,20,59,35C48,50,30,61,10,64C-10,67,-32,62,-47,49C-62,36,-70,15,-69,-6C-68,-27,-58,-47,-42,-58C-26,-69,-4,-71,15,-68C34,-65,32,-67,45,-58Z" transform="translate(100 100)" />
+</svg>
+<svg class="blob-svg" style="bottom:-160px; right:-160px; width:460px;" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <path fill="#FF6B6B" d="M42,-54C53,-45,58,-28,62,-10C66,7,69,25,61,38C53,51,35,60,16,65C-3,70,-24,71,-40,62C-56,53,-67,34,-69,15C-71,-4,-64,-24,-52,-39C-40,-54,-23,-64,-4,-63C15,-62,31,-63,42,-54Z" transform="translate(100 100)" />
+</svg>
+
+<!-- ============ AUTH / LOBBY SCREEN ============ -->
+<div id="authScreen" class="screen">
+  <div class="center-card">
+    <div class="logo">
+      <svg class="glyph" viewBox="0 0 100 100"><path fill="#C4F135" d="M52,10C68,8,84,22,86,40C88,56,80,72,64,80C48,88,28,86,16,74C4,62,2,42,10,28C18,14,36,12,52,10Z"/></svg>
+      <h1>Blobs</h1>
+    </div>
+    <p class="tagline">A 16-round bidding &amp; trick-taking game for 2–6 players</p>
+
+    <div id="nameStep">
+      <label for="nameInput">Your name</label>
+      <input type="text" id="nameInput" placeholder="e.g. Sam" maxlength="20" />
+
+      <label for="joinCodeInput">Room code (leave blank to start a new game)</label>
+      <input type="text" id="joinCodeInput" placeholder="e.g. FK3Q" maxlength="4" style="text-transform:uppercase" />
+
+      <button class="btn-primary" id="enterBtn">Join / Create Room</button>
+    </div>
+
+    <div class="error-box" id="authError"></div>
+  </div>
+</div>
+
+<!-- ============ ROOM LOBBY (waiting for players) ============ -->
+<div id="lobbyScreen" class="screen hidden">
+  <div class="center-card" style="max-width:520px;">
+    <h2 style="margin-top:0;">Waiting for players</h2>
+    <p style="color:var(--muted); font-size:14px;">Share this code — anyone can join from anywhere.</p>
+    <div class="room-code-pill" id="roomCodePill">----</div>
+    <div class="player-chip-list" id="lobbyPlayerList"></div>
+    <button class="btn-primary" id="startGameBtn">Start Game</button>
+    <p style="color:var(--muted); font-size:12px; text-align:center; margin-top:10px;" id="hostHint"></p>
+  </div>
+</div>
+
+<!-- ============ GAME SCREEN ============ -->
+<div id="gameScreen" class="screen hidden">
+  <div class="topbar">
+    <div class="round-badge">
+      <div><div class="num" id="roundNum">1</div><div class="lbl">of 16</div></div>
+      <div><div class="num" id="cardsThisRound" style="font-size:18px;">7</div><div class="lbl">cards</div></div>
+    </div>
+    <div class="trump-pill none" id="trumpPill">No trump yet</div>
+    <div class="room-code-pill" style="font-size:14px; padding:6px 12px;" id="roomCodePillGame">----</div>
+  </div>
+
+  <div class="board">
+    <div class="table-area">
+      <div class="seats" id="seatsRow"></div>
+
+      <div class="trick-blob-wrap">
+        <svg class="trick-blob" id="trickBlob" viewBox="0 0 200 200"><path fill="#8093F1" d="M50,10C68,10,84,26,84,46C84,66,68,84,48,86C28,88,8,76,4,56C0,36,10,14,28,10C40,7,42,10,50,10Z"/></svg>
+        <div class="trick-cards" id="trickCards"></div>
+      </div>
+
+      <div class="status-line" id="statusLine">Connecting…</div>
+
+      <div class="bid-controls hidden" id="bidControls"></div>
+
+      <div class="hand-row" id="handRow"></div>
+    </div>
+
+    <div class="sidebar">
+      <div class="panel">
+        <h3>Scores</h3>
+        <div id="scoreList"></div>
+      </div>
+      <div class="panel log-panel" id="logPanel">
+        <h3 style="margin-bottom:8px;">Table talk</h3>
+        <div id="logList"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ ROUND END MODAL ============ -->
+<div id="roundEndModal" class="modal-backdrop hidden">
+  <div class="modal">
+    <h2 style="margin-top:0;" id="roundEndTitle">Round complete</h2>
+    <div id="roundEndBody"></div>
+    <button class="btn-primary" id="roundEndBtn">Continue</button>
+  </div>
+</div>
+
+<!-- ============ GAME OVER MODAL ============ -->
+<div id="gameOverModal" class="modal-backdrop hidden">
+  <div class="modal">
+    <h2 style="margin-top:0;">🎉 Final Scores</h2>
+    <div id="gameOverBody"></div>
+  </div>
+</div>
+
+<script>
+/* ================= CONFIG =================
+   Set this to your deployed backend's URL (e.g. from Render).
+   While testing locally, http://localhost:3001 is fine.
+*/
+const SERVER_URL = window.BLOBS_SERVER_URL || 'http://localhost:3001';
+
+const socket = io(SERVER_URL, { transports: ['websocket', 'polling'] });
+
+const SUIT_SYMBOL = { S:'♠', H:'♥', D:'♦', C:'♣' };
+const SUIT_NAME = { S:'Spades', H:'Hearts', D:'Diamonds', C:'Clubs' };
+const RED_SUITS = ['H','D'];
+
+let myId = null;
+let currentState = null;
+let selectedBid = null;
+
+const $ = (id) => document.getElementById(id);
+
+function show(id){ $(id).classList.remove('hidden'); }
+function hide(id){ $(id).classList.add('hidden'); }
+
+function rankLabel(r){ return ({11:'J',12:'Q',13:'K',14:'A'})[r] || String(r); }
+
+function cardEl(card, opts={}){
+  const el = document.createElement('div');
+  el.className = 'card' + (RED_SUITS.includes(card.suit) ? ' red' : '');
+  el.innerHTML = `<div>${rankLabel(card.rank)}</div><div class="suit-sym">${SUIT_SYMBOL[card.suit]}</div>`;
+  return el;
+}
+
+/* ---------- Auth screen ---------- */
+$('enterBtn').onclick = () => {
+  const name = $('nameInput').value.trim() || 'Player';
+  const code = $('joinCodeInput').value.trim().toUpperCase();
+  $('authError').style.display = 'none';
+  if (code) socket.emit('join_room', { roomCode: code, name });
+  else socket.emit('create_room', { name });
+};
+
+socket.on('error_message', ({ message }) => {
+  const box = $('authError');
+  box.textContent = message;
+  box.style.display = 'block';
+});
+
+socket.on('joined', ({ roomCode, playerId }) => {
+  myId = playerId;
+  hide('authScreen');
+});
+
+/* ---------- State rendering ---------- */
+socket.on('state', (state) => {
+  currentState = state;
+  myId = state.you;
+
+  if (state.phase === 'lobby') { renderLobby(state); return; }
+  hide('lobbyScreen'); hide('authScreen'); show('gameScreen');
+  renderGame(state);
+});
+
+function renderLobby(state){
+  hide('authScreen'); hide('gameScreen'); show('lobbyScreen');
+  $('roomCodePill').textContent = state.roomCode;
+  const list = $('lobbyPlayerList');
+  list.innerHTML = '';
+  state.players.forEach(p => {
+    const chip = document.createElement('div');
+    chip.className = 'player-chip';
+    chip.innerHTML = `<span class="dot ${p.connected?'':'off'}"></span> ${p.name} ${p.isHost ? '<span class="crown">HOST</span>':''}`;
+    list.appendChild(chip);
+  });
+  const me = state.players.find(p => p.id === myId);
+  const startBtn = $('startGameBtn');
+  if (me && me.isHost) {
+    startBtn.style.display = 'block';
+    startBtn.disabled = state.players.length < 2;
+    $('hostHint').textContent = state.players.length < 2 ? 'Need at least 2 players to start.' : 'You\'re the host — start whenever ready.';
+  } else {
+    startBtn.style.display = 'none';
+    $('hostHint').textContent = 'Waiting for the host to start the game…';
+  }
+}
+$('startGameBtn').onclick = () => socket.emit('start_game');
+
+function renderGame(state){
+  $('roomCodePillGame').textContent = state.roomCode;
+  hide('roundEndModal'); hide('gameOverModal');
+
+  if (state.round) {
+    $('roundNum').textContent = state.round.number;
+    $('cardsThisRound').textContent = state.round.cards;
+  }
+
+  const pill = $('trumpPill');
+  if (state.trumpSuit) {
+    pill.textContent = `Trump: ${SUIT_SYMBOL[state.trumpSuit]} ${SUIT_NAME[state.trumpSuit]}`;
+    pill.className = 'trump-pill ' + (RED_SUITS.includes(state.trumpSuit) ? 'red' : 'black');
+  } else if (state.round && !state.round.hasTrump) {
+    pill.textContent = 'No trump this round';
+    pill.className = 'trump-pill none';
+  } else {
+    pill.textContent = 'Trump not drawn yet';
+    pill.className = 'trump-pill none';
+  }
+
+  // Seats
+  const seatsRow = $('seatsRow');
+  seatsRow.innerHTML = '';
+  state.players.forEach(p => {
+    const seat = document.createElement('div');
+    seat.className = 'seat' + (p.id === state.turnPlayerId || p.id === state.biddingPlayerId ? ' active-turn' : '') + (p.id === state.dealerId ? ' dealer' : '');
+    const bidTxt = p.bid === null || p.bid === undefined ? '–' : p.bid;
+    seat.innerHTML = `
+      <div class="name">${p.name}${p.id===myId?' (you)':''}</div>
+      <div class="meta">
+        <span>🂠 ${p.handCount}</span>
+        <span class="bid-num">bid ${bidTxt}</span>
+        <span>won ${p.tricksWon}</span>
+      </div>`;
+    seatsRow.appendChild(seat);
+  });
+
+  // Trick area
+  const trickCards = $('trickCards');
+  trickCards.innerHTML = '';
+  state.currentTrick.forEach(t => {
+    const col = document.createElement('div');
+    col.className = 'trick-card-col';
+    const player = state.players.find(p => p.id === t.playerId);
+    col.appendChild(cardEl(t.card));
+    const lbl = document.createElement('div');
+    lbl.className = 'trick-player-label';
+    lbl.textContent = player ? player.name : '';
+    col.appendChild(lbl);
+    trickCards.appendChild(col);
+  });
+
+  // Status line
+  const statusLine = $('statusLine');
+  const me = state.players.find(p => p.id === myId);
+  if (state.phase === 'bidding') {
+    const biddingPlayer = state.players.find(p => p.id === state.biddingPlayerId);
+    const isMine = state.biddingPlayerId === myId;
+    statusLine.textContent = isMine ? "Your turn to bid — how many tricks will you win?" : `Waiting for ${biddingPlayer ? biddingPlayer.name : '…'} to bid…`;
+    statusLine.className = 'status-line' + (isMine ? ' mine' : '');
+  } else if (state.phase === 'playing') {
+    const turnPlayer = state.players.find(p => p.id === state.turnPlayerId);
+    const isMine = state.turnPlayerId === myId;
+    statusLine.textContent = isMine ? "Your turn — play a card." : `Waiting for ${turnPlayer ? turnPlayer.name : '…'}…`;
+    statusLine.className = 'status-line' + (isMine ? ' mine' : '');
+  } else {
+    statusLine.textContent = '';
+  }
+
+  // Bid controls
+  const bidControls = $('bidControls');
+  if (state.phase === 'bidding' && state.biddingPlayerId === myId) {
+    show('bidControls');
+    bidControls.innerHTML = '';
+    const max = state.round.cards;
+    for (let i = 0; i <= max; i++) {
+      const btn = document.createElement('button');
+      btn.className = 'bid-btn';
+      btn.textContent = i;
+      btn.disabled = (i === state.forbiddenBid);
+      btn.onclick = () => socket.emit('submit_bid', { bid: i });
+      bidControls.appendChild(btn);
+    }
+  } else {
+    hide('bidControls');
+  }
+
+  // Hand
+  const handRow = $('handRow');
+  handRow.innerHTML = '';
+  const isBlindHidden = state.yourHand === null;
+  if (!isBlindHidden && state.yourHand) {
+    const myTurn = state.phase === 'playing' && state.turnPlayerId === myId;
+    let legalSuit = null;
+    if (myTurn && state.currentTrick.length > 0) legalSuit = state.currentTrick[0].card.suit;
+    const haveLegalSuit = legalSuit ? state.yourHand.some(c => c.suit === legalSuit) : false;
+
+    state.yourHand.forEach(card => {
+      const wrap = cardEl(card);
+      wrap.classList.add('hand-card');
+      const playable = myTurn && (!legalSuit || !haveLegalSuit || card.suit === legalSuit);
+      if (!myTurn) wrap.classList.add('disabled');
+      else if (legalSuit && haveLegalSuit && card.suit !== legalSuit) wrap.classList.add('disabled');
+      wrap.onclick = () => {
+        if (!myTurn) return;
+        if (legalSuit && haveLegalSuit && card.suit !== legalSuit) return;
+        socket.emit('play_card', { card });
+      };
+      handRow.appendChild(wrap);
+    });
+  } else if (isBlindHidden) {
+    const note = document.createElement('div');
+    note.style.color = 'var(--muted)';
+    note.style.fontSize = '13px';
+    note.textContent = 'Bidding blind this round — your hand is hidden until everyone has bid.';
+    handRow.appendChild(note);
+  }
+
+  // Scores
+  const scoreList = $('scoreList');
+  scoreList.innerHTML = '';
+  state.players.slice().sort((a,b)=>b.score-a.score).forEach(p => {
+    const row = document.createElement('div');
+    row.className = 'score-row';
+    row.innerHTML = `<span>${p.name}${p.id===myId?' (you)':''}</span><span class="val">${p.score}</span>`;
+    scoreList.appendChild(row);
+  });
+
+  // Log
+  const logList = $('logList');
+  logList.innerHTML = state.log.map(l => `<div>${l}</div>`).join('');
+  $('logPanel').scrollTop = $('logPanel').scrollHeight;
+
+  // Round end modal
+  if (state.phase === 'round_end' && state.roundSummary) {
+    show('roundEndModal');
+    $('roundEndTitle').textContent = `Round ${state.round.number} complete`;
+    const body = $('roundEndBody');
+    body.innerHTML = state.roundSummary.map(s => `
+      <div class="summary-row">
+        <span>${s.name}${s.id===myId?' (you)':''}</span>
+        <span>bid ${s.bid}, won ${s.tricksWon} — <span class="${s.hit?'hit':'miss'}">${s.hit ? '+'+s.points : 'blob'}</span></span>
+      </div>`).join('');
+    const btn = $('roundEndBtn');
+    btn.style.display = me && me.isHost ? 'block' : 'none';
+    btn.onclick = () => socket.emit('next_round');
+    if (!(me && me.isHost)) {
+      const waitMsg = document.createElement('p');
+      waitMsg.style.color = 'var(--muted)';
+      waitMsg.style.fontSize = '13px';
+      waitMsg.style.textAlign = 'center';
+      waitMsg.textContent = 'Waiting for host to continue…';
+      body.appendChild(waitMsg);
+    }
+  }
+
+  // Game over modal
+  if (state.phase === 'game_over') {
+    show('gameOverModal');
+    const sorted = state.players.slice().sort((a,b)=>b.score-a.score);
+    $('gameOverBody').innerHTML = sorted.map((p,i) => `
+      <div class="summary-row">
+        <span>${i===0?'🏆 ':''}${p.name}${p.id===myId?' (you)':''}</span>
+        <span class="val" style="font-family:'Baloo 2'; font-weight:800; color:var(--lime);">${p.score}</span>
+      </div>`).join('');
+  }
+}
+</script>
+</body>
+</html>
