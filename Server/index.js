@@ -79,6 +79,7 @@ function publicPlayers(room) {
     id: p.id,
     name: p.name,
     connected: p.connected,
+    isBot: !!p.isBot,
     isHost: i === room.hostIndex,
     isDealer: i === room.dealerIndex,
     handCount: p.hand ? p.hand.length : 0,
@@ -166,6 +167,7 @@ function startRound(room) {
 
   addLog(room, `Round ${room.round} begins — ${def.cards} card${def.cards === 1 ? '' : 's'} each${def.trump ? '' : ', no trump'}${def.blind ? ', blind bidding' : ''}.`);
   broadcastState(room);
+  maybeTriggerBot(room);
 }
 
 function updateForbiddenBid(room) {
@@ -207,6 +209,120 @@ function legalCards(hand, currentTrick, trumpSuit) {
   return haveLed.length > 0 ? haveLed : hand.slice();
 }
 
+// ---------- Bot (computer opponent) AI ----------
+
+const BOT_NAMES = ['Blob Byte', 'Blob Cleo', 'Blob Wren', 'Blob Otto', 'Blob Finch'];
+
+function makeBot(index) {
+  return {
+    id: `bot_${Math.random().toString(36).slice(2, 10)}`,
+    socketId: null,
+    isBot: true,
+    name: BOT_NAMES[index % BOT_NAMES.length],
+    connected: true,
+    hand: [],
+    score: 0,
+    tricksWon: 0
+  };
+}
+
+function cardBeats(challenger, current, ledSuit, trumpSuit) {
+  const chTrump = trumpSuit && challenger.suit === trumpSuit;
+  const curTrump = trumpSuit && current.suit === trumpSuit;
+  if (chTrump && !curTrump) return true;
+  if (chTrump && curTrump) return challenger.rank > current.rank;
+  if (!chTrump && curTrump) return false;
+  if (challenger.suit === ledSuit && current.suit === ledSuit) return challenger.rank > current.rank;
+  if (challenger.suit === ledSuit && current.suit !== ledSuit) return true;
+  return false;
+}
+
+function currentTrickWinningCard(trick, trumpSuit) {
+  const ledSuit = trick[0].card.suit;
+  let winner = trick[0].card;
+  for (const t of trick.slice(1)) {
+    if (cardBeats(t.card, winner, ledSuit, trumpSuit)) winner = t.card;
+  }
+  return winner;
+}
+
+function botDecideBid(room, playerIndex) {
+  const def = ROUNDS[room.round - 1];
+  const player = room.players[playerIndex];
+  const n = room.players.length;
+  let estimate;
+
+  if (def.blind) {
+    estimate = Math.round(def.cards / n);
+  } else {
+    let score = 0;
+    for (const c of player.hand) {
+      if (c.rank >= 13) score += 1;       // King or Ace
+      else if (c.rank === 12) score += 0.5; // Queen
+    }
+    estimate = Math.round(score);
+  }
+  estimate = Math.max(0, Math.min(def.cards, estimate));
+
+  const isLastBidder = room.bidOrder[room.bidOrder.length - 1] === playerIndex;
+  if (isLastBidder) {
+    const sumSoFar = room.players.reduce((s, p) => s + (p.bid || 0), 0);
+    const forbidden = def.cards - sumSoFar;
+    if (estimate === forbidden) {
+      estimate = estimate + 1 <= def.cards ? estimate + 1 : Math.max(0, estimate - 1);
+    }
+  }
+  return estimate;
+}
+
+function botDecideCard(room, playerIndex) {
+  const player = room.players[playerIndex];
+  const legal = legalCards(player.hand, room.currentTrick, room.trumpSuit);
+  const needsMore = (player.tricksWon || 0) < (player.bid || 0);
+
+  if (room.currentTrick.length === 0) {
+    const sorted = legal.slice().sort((a, b) => a.rank - b.rank);
+    return needsMore ? sorted[sorted.length - 1] : sorted[0];
+  }
+
+  const ledSuit = room.currentTrick[0].card.suit;
+  const winningCard = currentTrickWinningCard(room.currentTrick, room.trumpSuit);
+  const winners = legal.filter(c => cardBeats(c, winningCard, ledSuit, room.trumpSuit));
+
+  if (needsMore && winners.length > 0) {
+    return winners.slice().sort((a, b) => a.rank - b.rank)[0];
+  }
+  const dumpOrder = legal.slice().sort((a, b) => {
+    const aTrump = room.trumpSuit && a.suit === room.trumpSuit;
+    const bTrump = room.trumpSuit && b.suit === room.trumpSuit;
+    if (aTrump !== bTrump) return aTrump ? 1 : -1;
+    return a.rank - b.rank;
+  });
+  return dumpOrder[0];
+}
+
+function maybeTriggerBot(room) {
+  if (room.phase === 'bidding' && room.biddingIndex != null) {
+    const p = room.players[room.biddingIndex];
+    if (p && p.isBot) {
+      const idx = room.biddingIndex;
+      setTimeout(() => {
+        if (room.phase !== 'bidding' || room.biddingIndex !== idx) return;
+        commitBid(room, idx, botDecideBid(room, idx));
+      }, 900 + Math.random() * 700);
+    }
+  } else if (room.phase === 'playing' && room.turnIndex != null) {
+    const p = room.players[room.turnIndex];
+    if (p && p.isBot) {
+      const idx = room.turnIndex;
+      setTimeout(() => {
+        if (room.phase !== 'playing' || room.turnIndex !== idx) return;
+        commitPlay(room, idx, botDecideCard(room, idx));
+      }, 900 + Math.random() * 700);
+    }
+  }
+}
+
 function resolveTrick(room) {
   const ledSuit = room.currentTrick[0].card.suit;
   let winner = room.currentTrick[0];
@@ -236,6 +352,7 @@ function resolveTrick(room) {
   } else {
     room.turnIndex = winnerIndex;
     broadcastState(room);
+    maybeTriggerBot(room);
   }
 }
 
@@ -265,6 +382,43 @@ function advanceToNextRound(room) {
   room.round += 1;
   room.dealerIndex = nextIndex(room, room.dealerIndex);
   startRound(room);
+}
+
+function commitBid(room, idx, n) {
+  room.players[idx].bid = n;
+  addLog(room, `${room.players[idx].name} bids ${n}.`);
+
+  const pos = room.bidOrder.indexOf(room.biddingIndex);
+  if (pos === room.bidOrder.length - 1) {
+    beginPlay(room);
+    broadcastState(room);
+    maybeTriggerBot(room);
+  } else {
+    room.biddingIndex = room.bidOrder[pos + 1];
+    updateForbiddenBid(room);
+    broadcastState(room);
+    maybeTriggerBot(room);
+  }
+}
+
+function commitPlay(room, idx, card) {
+  const player = room.players[idx];
+  const legal = legalCards(player.hand, room.currentTrick, room.trumpSuit);
+  const match = legal.find(c => c.suit === card.suit && c.rank === card.rank);
+  if (!match) return; // shouldn't happen for bots; humans are validated by the caller
+
+  player.hand = player.hand.filter(c => !(c.suit === card.suit && c.rank === card.rank));
+  room.currentTrick.push({ playerId: player.id, card: match });
+  addLog(room, `${player.name} plays ${cardLabel(match)}.`);
+
+  if (room.currentTrick.length === room.players.length) {
+    broadcastState(room);
+    setTimeout(() => resolveTrick(room), 1200);
+  } else {
+    room.turnIndex = nextIndex(room, room.turnIndex);
+    broadcastState(room);
+    maybeTriggerBot(room);
+  }
 }
 
 // ---------- Socket handling ----------
@@ -312,12 +466,19 @@ io.on('connection', (socket) => {
     broadcastState(room);
   }
 
-  socket.on('start_game', () => {
+  socket.on('start_game', ({ botCount } = {}) => {
     const room = getRoom(socket);
     if (!room) return;
     const idx = room.players.findIndex(p => p.id === socket.data.playerId);
     if (idx !== room.hostIndex) return socket.emit('error_message', { message: 'Only the host can start the game.' });
-    if (room.players.length < 2) return socket.emit('error_message', { message: 'Need at least 2 players.' });
+
+    const bots = Math.max(0, Math.min(5, Number(botCount) || 0));
+    const humanCount = room.players.length;
+    if (humanCount + bots < 2) return socket.emit('error_message', { message: 'Need at least 2 players total.' });
+    if (humanCount + bots > 6) return socket.emit('error_message', { message: 'A maximum of 6 players total (humans + computer opponents).' });
+
+    for (let i = 0; i < bots; i++) room.players.push(makeBot(i));
+
     room.dealerIndex = Math.floor(Math.random() * room.players.length);
     room.round = 1;
     startRound(room);
@@ -337,17 +498,7 @@ io.on('connection', (socket) => {
     if (isLastBidder && n === room.forbiddenBidForCurrentBidder) {
       return socket.emit('error_message', { message: `As last bidder, you cannot bid ${n} (bids can't total ${def.cards}).` });
     }
-    room.players[idx].bid = n;
-    addLog(room, `${room.players[idx].name} bids ${n}.`);
-
-    const pos = room.bidOrder.indexOf(room.biddingIndex);
-    if (pos === room.bidOrder.length - 1) {
-      beginPlay(room);
-    } else {
-      room.biddingIndex = room.bidOrder[pos + 1];
-      updateForbiddenBid(room);
-    }
-    broadcastState(room);
+    commitBid(room, idx, n);
   });
 
   socket.on('play_card', ({ card }) => {
@@ -359,18 +510,7 @@ io.on('connection', (socket) => {
     const legal = legalCards(player.hand, room.currentTrick, room.trumpSuit);
     const match = legal.find(c => c.suit === card.suit && c.rank === card.rank);
     if (!match) return socket.emit('error_message', { message: 'You must follow suit if you can.' });
-
-    player.hand = player.hand.filter(c => !(c.suit === card.suit && c.rank === card.rank));
-    room.currentTrick.push({ playerId: player.id, card: match });
-    addLog(room, `${player.name} plays ${cardLabel(match)}.`);
-
-    if (room.currentTrick.length === room.players.length) {
-      broadcastState(room);
-      setTimeout(() => resolveTrick(room), 1200);
-    } else {
-      room.turnIndex = nextIndex(room, room.turnIndex);
-      broadcastState(room);
-    }
+    commitPlay(room, idx, match);
   });
 
   socket.on('send_emote', ({ phrase }) => {

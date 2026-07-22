@@ -266,6 +266,11 @@
     <p style="color:var(--muted); font-size:14px;">Share this code — anyone can join from anywhere.</p>
     <div class="room-code-pill" id="roomCodePill">----</div>
     <div class="player-chip-list" id="lobbyPlayerList"></div>
+    <div id="botSelectorWrap" class="hidden">
+      <label for="botCountSelect" style="margin-top:20px;">Computer opponents</label>
+      <select id="botCountSelect" style="width:100%; padding:12px 14px; border-radius:14px; border:1.5px solid rgba(255,255,255,0.08); background:var(--surface2); color:var(--cream); font-size:15px; font-family:'Inter',sans-serif;"></select>
+      <p style="color:var(--muted); font-size:12px; margin-top:6px;">Playing solo? Add up to 5 computer-controlled opponents to fill the table.</p>
+    </div>
     <button class="btn-primary" id="startGameBtn">Start Game</button>
     <p style="color:var(--muted); font-size:12px; text-align:center; margin-top:10px;" id="hostHint"></p>
   </div>
@@ -462,16 +467,36 @@ function renderLobby(state){
   });
   const me = state.players.find(p => p.id === myId);
   const startBtn = $('startGameBtn');
+  const botWrap = $('botSelectorWrap');
   if (me && me.isHost) {
     startBtn.style.display = 'block';
-    startBtn.disabled = state.players.length < 2;
-    $('hostHint').textContent = state.players.length < 2 ? 'Need at least 2 players to start.' : 'You\'re the host — start whenever ready.';
+    const maxBots = Math.max(0, Math.min(5, 6 - state.players.length));
+    const select = $('botCountSelect');
+    const prevVal = select.value;
+    select.innerHTML = '';
+    for (let i = 0; i <= maxBots; i++) {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = i === 0 ? 'None' : `${i} computer opponent${i>1?'s':''}`;
+      select.appendChild(opt);
+    }
+    if (prevVal && Number(prevVal) <= maxBots) select.value = prevVal;
+    if (maxBots > 0) show('botSelectorWrap'); else hide('botSelectorWrap');
+    startBtn.disabled = (state.players.length + Number(select.value)) < 2;
+    $('hostHint').textContent = (state.players.length + Number(select.value)) < 2
+      ? 'Add at least one computer opponent, or wait for another player to join.'
+      : 'You\'re the host — start whenever ready.';
   } else {
     startBtn.style.display = 'none';
+    hide('botSelectorWrap');
     $('hostHint').textContent = 'Waiting for the host to start the game…';
   }
 }
-$('startGameBtn').onclick = () => socket.emit('start_game');
+$('botCountSelect').onchange = () => { if (currentState) renderLobby(currentState); };
+$('startGameBtn').onclick = () => {
+  const botCount = Number($('botCountSelect').value || 0);
+  socket.emit('start_game', { botCount });
+};
 
 function renderGame(state){
   $('roomCodePillGame').textContent = state.roomCode;
@@ -504,7 +529,7 @@ function renderGame(state){
     seat.dataset.playerId = p.id;
     const bidTxt = p.bid === null || p.bid === undefined ? '–' : p.bid;
     seat.innerHTML = `
-      <div class="name">${p.name}${p.id===myId?' (you)':''}</div>
+      <div class="name">${p.isBot ? '🤖 ' : ''}${p.name}${p.id===myId?' (you)':''}</div>
       <div class="meta">
         <span class="bid-num">bid ${bidTxt}</span>
         <span>won ${p.tricksWon}</span>
@@ -620,7 +645,7 @@ function renderGame(state){
     row.className = 'lb-row';
     const bidTxt = p.bid === null || p.bid === undefined ? '–' : p.bid;
     row.innerHTML = `
-      <span class="lb-name">${p.name}${p.id===myId?' (you)':''}${p.id===state.dealerId?'<span class="lb-dealer-tag">DEALER</span>':''}</span>
+      <span class="lb-name">${p.isBot ? '🤖 ' : ''}${p.name}${p.id===myId?' (you)':''}${p.id===state.dealerId?'<span class="lb-dealer-tag">DEALER</span>':''}</span>
       <span class="lb-val">${bidTxt}</span>
       <span class="lb-val">${p.tricksWon}</span>
       <span class="lb-val" style="font-family:'Baloo 2'; font-weight:800; color:var(--lime);">${p.score}</span>`;
