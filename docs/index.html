@@ -206,8 +206,23 @@
   .card .corner.bottom{ align-self:flex-end; transform:rotate(180deg); }
   .card .corner .pip{ font-size:15px; margin-top:1px; }
   .card .center-pip{ position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:30px; }
-  .trick-player-label{ font-size:10px; text-align:center; color:var(--cream); margin-top:4px; }
+  .trick-player-label{
+    font-size:11px; text-align:center; color:#1a1a1a; margin-bottom:6px; font-weight:700;
+    background:var(--lime); padding:3px 10px; border-radius:999px; white-space:nowrap;
+    box-shadow:0 3px 8px rgba(0,0,0,0.3);
+  }
   .trick-card-col{ display:flex; flex-direction:column; align-items:center; }
+
+  @keyframes slideInBottom{
+    from{ opacity:0; transform:translateY(90px) scale(0.6) rotate(-6deg); }
+    to{ opacity:1; transform:translateY(0) scale(1) rotate(0deg); }
+  }
+  @keyframes slideInTop{
+    from{ opacity:0; transform:translateY(-90px) scale(0.6) rotate(6deg); }
+    to{ opacity:1; transform:translateY(0) scale(1) rotate(0deg); }
+  }
+  .slide-in-bottom{ animation:slideInBottom .38s cubic-bezier(.2,.8,.3,1); }
+  .slide-in-top{ animation:slideInTop .38s cubic-bezier(.2,.8,.3,1); }
 
   .hand-row{ display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-top:18px; }
   .hand-card{ cursor:pointer; }
@@ -300,6 +315,10 @@
       <label for="botCountSelect" style="margin-top:20px;">Computer opponents</label>
       <select id="botCountSelect" style="width:100%; padding:12px 14px; border-radius:14px; border:1.5px solid rgba(255,255,255,0.08); background:var(--surface2); color:var(--cream); font-size:15px; font-family:'Inter',sans-serif;"></select>
       <p style="color:var(--muted); font-size:12px; margin-top:6px;">Playing solo? Add up to 5 computer-controlled opponents to fill the table.</p>
+    </div>
+    <div id="cheatToggleWrap" class="hidden" style="margin-top:20px; display:flex; align-items:center; gap:10px;">
+      <input type="checkbox" id="cheatToggle" style="width:18px; height:18px;" />
+      <label for="cheatToggle" style="margin:0; font-size:13px; color:var(--cream);">Allow cheating (players can skip following suit — but can be caught)</label>
     </div>
     <button class="btn-primary" id="startGameBtn">Start Game</button>
     <p style="color:var(--muted); font-size:12px; text-align:center; margin-top:10px;" id="hostHint"></p>
@@ -415,6 +434,7 @@ const RED_SUITS = ['H','D'];
 let myId = null;
 let currentState = null;
 let selectedBid = null;
+let lastAnimatedTrickCardKey = null;
 const activeBubbles = {}; // playerId -> timeout id
 const EMOTE_PHRASES = ['I was alright', 'Fence Sitter'];
 
@@ -472,6 +492,11 @@ function resetEnterBtn(){
 }
 
 socket.on('error_message', ({ message }) => {
+  const gameVisible = !$('gameScreen').classList.contains('hidden');
+  if (gameVisible) {
+    showToast(message);
+    return;
+  }
   resetEnterBtn();
   const box = $('authError');
   box.textContent = message;
@@ -514,7 +539,7 @@ function showBubbleOnSeat(playerId, phrase){
   bubble.textContent = phrase;
 }
 
-function renderEmoteBar(){
+function renderEmoteBar(state){
   const bar = $('emoteBar');
   bar.innerHTML = '';
   EMOTE_PHRASES.forEach(phrase => {
@@ -524,6 +549,16 @@ function renderEmoteBar(){
     btn.onclick = () => socket.emit('send_emote', { phrase });
     bar.appendChild(btn);
   });
+  if (state && state.cheatingEnabled) {
+    const accuseBtn = document.createElement('button');
+    accuseBtn.className = 'emote-btn';
+    accuseBtn.style.background = 'rgba(179,58,58,0.35)';
+    accuseBtn.style.borderColor = 'var(--coral)';
+    accuseBtn.style.color = '#ffd7d7';
+    accuseBtn.textContent = '🚨 Someone is definitely cheating';
+    accuseBtn.onclick = () => socket.emit('accuse_cheating');
+    bar.appendChild(accuseBtn);
+  }
 }
 
 /* ---------- End game / rematch ---------- */
@@ -621,6 +656,7 @@ function renderLobby(state){
     }
     if (prevVal && Number(prevVal) <= maxBots) select.value = prevVal;
     if (maxBots > 0) show('botSelectorWrap'); else hide('botSelectorWrap');
+    show('cheatToggleWrap');
     startBtn.disabled = (state.players.length + Number(select.value)) < 2;
     $('hostHint').textContent = (state.players.length + Number(select.value)) < 2
       ? 'Add at least one computer opponent, or wait for another player to join.'
@@ -628,19 +664,21 @@ function renderLobby(state){
   } else {
     startBtn.style.display = 'none';
     hide('botSelectorWrap');
+    hide('cheatToggleWrap');
     $('hostHint').textContent = 'Waiting for the host to start the game…';
   }
 }
 $('botCountSelect').onchange = () => { if (currentState) renderLobby(currentState); };
 $('startGameBtn').onclick = () => {
   const botCount = Number($('botCountSelect').value || 0);
-  socket.emit('start_game', { botCount });
+  const cheatingEnabled = $('cheatToggle').checked;
+  socket.emit('start_game', { botCount, cheatingEnabled });
 };
 
 function renderGame(state){
   $('roomCodePillGame').textContent = state.roomCode;
   hide('roundEndModal'); hide('gameOverModal'); hide('rematchModal');
-  renderEmoteBar();
+  renderEmoteBar(state);
 
   if (state.round) {
     $('roundNum').textContent = state.round.number;
@@ -681,15 +719,23 @@ function renderGame(state){
   // Trick area
   const trickCards = $('trickCards');
   trickCards.innerHTML = '';
-  state.currentTrick.forEach(t => {
+  if (state.currentTrick.length === 0) lastAnimatedTrickCardKey = null;
+  state.currentTrick.forEach((t, i) => {
     const col = document.createElement('div');
     col.className = 'trick-card-col';
     const player = state.players.find(p => p.id === t.playerId);
-    col.appendChild(cardEl(t.card));
     const lbl = document.createElement('div');
     lbl.className = 'trick-player-label';
-    lbl.textContent = player ? player.name : '';
+    lbl.textContent = (player ? (player.isBot ? '🤖 ' : '') + player.name : '') + (t.playerId === myId ? ' (you)' : '');
     col.appendChild(lbl);
+    const card = cardEl(t.card);
+    const isNewest = i === state.currentTrick.length - 1;
+    const trickCardKey = state.currentTrick.length + ':' + t.playerId + ':' + t.card.suit + t.card.rank;
+    if (isNewest && trickCardKey !== lastAnimatedTrickCardKey) {
+      card.classList.add(t.playerId === myId ? 'slide-in-bottom' : 'slide-in-top');
+      lastAnimatedTrickCardKey = trickCardKey;
+    }
+    col.appendChild(card);
     trickCards.appendChild(col);
   });
 
@@ -759,16 +805,17 @@ function renderGame(state){
     let legalSuit = null;
     if (myTurn && state.currentTrick.length > 0) legalSuit = state.currentTrick[0].card.suit;
     const haveLegalSuit = legalSuit ? state.yourHand.some(c => c.suit === legalSuit) : false;
+    const suitEnforced = !state.cheatingEnabled;
 
     state.yourHand.forEach(card => {
       const wrap = cardEl(card);
       wrap.classList.add('hand-card');
-      const playable = myTurn && (!legalSuit || !haveLegalSuit || card.suit === legalSuit);
+      const blockedByCard = suitEnforced && legalSuit && haveLegalSuit && card.suit !== legalSuit;
       if (!myTurn) wrap.classList.add('disabled');
-      else if (legalSuit && haveLegalSuit && card.suit !== legalSuit) wrap.classList.add('disabled');
+      else if (blockedByCard) wrap.classList.add('disabled');
       wrap.onclick = () => {
         if (!myTurn) return;
-        if (legalSuit && haveLegalSuit && card.suit !== legalSuit) return;
+        if (blockedByCard) return;
         socket.emit('play_card', { card });
       };
       handRow.appendChild(wrap);
@@ -808,8 +855,8 @@ function renderGame(state){
     const body = $('roundEndBody');
     body.innerHTML = state.roundSummary.map(s => `
       <div class="summary-row">
-        <span>${s.name}${s.id===myId?' (you)':''}</span>
-        <span>bid ${s.bid}, won ${s.tricksWon} — <span class="${s.hit?'hit':'miss'}">${s.hit ? '+'+s.points : 'blob'}</span></span>
+        <span>${s.name}${s.id===myId?' (you)':''}${s.cheated ? `<span style="color:var(--coral); font-weight:800; margin-left:6px;">🚨 ${s.caught ? 'CHEATED — CAUGHT' : 'CHEATED — got away with it'}</span>` : ''}</span>
+        <span>bid ${s.bid}, won ${s.tricksWon} — <span class="${s.caught ? 'miss' : (s.hit?'hit':'miss')}">${s.caught ? '0 (caught!)' : (s.hit ? '+'+s.points : 'blob')}</span></span>
       </div>`).join('');
     const btn = $('roundEndBtn');
     btn.style.display = me && me.isHost ? 'block' : 'none';

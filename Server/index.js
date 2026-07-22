@@ -121,6 +121,7 @@ function broadcastState(room) {
       lastTrickWinnerId: room.lastTrickWinnerId || null,
       roundSummary: room.roundSummary || null,
       rematchDeadline: room.rematchDeadline || null,
+      cheatingEnabled: !!room.cheatingEnabled,
       log: room.log.slice(-8)
     };
     if (p.socketId) io.to(p.socketId).emit('state', payload);
@@ -161,6 +162,8 @@ function startRound(room) {
   room.turnIndex = null;
   room.lastTrickWinnerId = null;
   room.roundSummary = null;
+  room.cheatersThisRound = new Set();
+  room.caughtCheatersThisRound = new Set();
 
   room.biddingIndex = nextIndex(room, room.dealerIndex);
   room.bidOrder = [];
@@ -363,10 +366,12 @@ function resolveTrick(room) {
 function finishRound(room) {
   const summary = [];
   for (const p of room.players) {
+    const cheated = room.cheatersThisRound && room.cheatersThisRound.has(p.id);
+    const caught = room.caughtCheatersThisRound && room.caughtCheatersThisRound.has(p.id);
     const hit = p.bid === p.tricksWon;
-    const points = hit ? 10 + p.bid : 0;
+    const points = caught ? 0 : (hit ? 10 + p.bid : 0);
     p.score = (p.score || 0) + points;
-    summary.push({ id: p.id, name: p.name, bid: p.bid, tricksWon: p.tricksWon, points, hit });
+    summary.push({ id: p.id, name: p.name, bid: p.bid, tricksWon: p.tricksWon, points, hit, cheated, caught });
   }
   room.roundSummary = summary;
   room.phase = 'round_end';
@@ -405,14 +410,14 @@ function commitBid(room, idx, n) {
   }
 }
 
-function commitPlay(room, idx, card) {
+function commitPlay(room, idx, card, cheated = false) {
   const player = room.players[idx];
-  const legal = legalCards(player.hand, room.currentTrick, room.trumpSuit);
-  const match = legal.find(c => c.suit === card.suit && c.rank === card.rank);
-  if (!match) return; // shouldn't happen for bots; humans are validated by the caller
+  const match = player.hand.find(c => c.suit === card.suit && c.rank === card.rank);
+  if (!match) return; // shouldn't happen; caller is responsible for resolving a real hand card
 
   player.hand = player.hand.filter(c => !(c.suit === card.suit && c.rank === card.rank));
   room.currentTrick.push({ playerId: player.id, card: match });
+  if (cheated) room.cheatersThisRound.add(player.id);
   addLog(room, `${player.name} plays ${cardLabel(match)}.`);
 
   if (room.currentTrick.length === room.players.length) {
@@ -534,7 +539,7 @@ io.on('connection', (socket) => {
     broadcastState(room);
   }
 
-  socket.on('start_game', ({ botCount } = {}) => {
+  socket.on('start_game', ({ botCount, cheatingEnabled } = {}) => {
     const room = getRoom(socket);
     if (!room) return;
     const idx = room.players.findIndex(p => p.id === socket.data.playerId);
@@ -547,6 +552,7 @@ io.on('connection', (socket) => {
 
     for (let i = 0; i < bots; i++) room.players.push(makeBot(i));
 
+    room.cheatingEnabled = !!cheatingEnabled;
     room.dealerIndex = Math.floor(Math.random() * room.players.length);
     room.round = 1;
     startRound(room);
@@ -576,9 +582,21 @@ io.on('connection', (socket) => {
     if (idx !== room.turnIndex) return socket.emit('error_message', { message: 'Not your turn.' });
     const player = room.players[idx];
     const legal = legalCards(player.hand, room.currentTrick, room.trumpSuit);
-    const match = legal.find(c => c.suit === card.suit && c.rank === card.rank);
+    let match = legal.find(c => c.suit === card.suit && c.rank === card.rank);
+    let cheated = false;
+
+    if (!match && room.cheatingEnabled) {
+      const anyHandMatch = player.hand.find(c => c.suit === card.suit && c.rank === card.rank);
+      if (anyHandMatch) {
+        match = anyHandMatch;
+        const ledSuit = room.currentTrick.length > 0 ? room.currentTrick[0].card.suit : null;
+        const hadLedSuit = ledSuit ? player.hand.some(c => c.suit === ledSuit) : false;
+        cheated = ledSuit && hadLedSuit && match.suit !== ledSuit;
+      }
+    }
+
     if (!match) return socket.emit('error_message', { message: 'You must follow suit if you can.' });
-    commitPlay(room, idx, match);
+    commitPlay(room, idx, match, cheated);
   });
 
   socket.on('send_emote', ({ phrase }) => {
@@ -587,6 +605,29 @@ io.on('connection', (socket) => {
     const player = room.players.find(p => p.id === socket.data.playerId);
     if (!player) return;
     io.to(room.code).emit('emote', { playerId: player.id, phrase });
+  });
+
+  socket.on('accuse_cheating', () => {
+    const room = getRoom(socket);
+    if (!room || !room.cheatingEnabled) return;
+    if (room.phase !== 'playing') {
+      return socket.emit('error_message', { message: 'You can only call that out while cards are being played.' });
+    }
+    const accuser = room.players.find(p => p.id === socket.data.playerId);
+    if (!accuser) return;
+
+    io.to(room.code).emit('emote', { playerId: accuser.id, phrase: 'Someone is definitely cheating!' });
+
+    const uncaught = [...room.cheatersThisRound].filter(id => !room.caughtCheatersThisRound.has(id));
+    if (uncaught.length > 0) {
+      uncaught.forEach(id => room.caughtCheatersThisRound.add(id));
+      const names = uncaught.map(id => room.players.find(p => p.id === id)?.name || 'someone').join(', ');
+      addLog(room, `🚨 ${accuser.name} caught ${names} cheating! They'll score 0 this round.`);
+    } else {
+      accuser.score = (accuser.score || 0) - 1;
+      addLog(room, `${accuser.name} accused someone of cheating, but no one was — 1 point deducted.`);
+    }
+    broadcastState(room);
   });
 
   socket.on('next_round', () => {
