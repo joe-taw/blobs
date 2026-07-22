@@ -85,7 +85,10 @@ function publicPlayers(room) {
     handCount: p.hand ? p.hand.length : 0,
     bid: room.phase === 'bidding_blind_hidden' ? null : (p.bid === undefined ? null : p.bid),
     tricksWon: p.tricksWon || 0,
-    score: p.score || 0
+    score: p.score || 0,
+    rematchStatus: room.phase === 'rematch_pending'
+      ? (room.rematchResponses[p.id] === true ? 'accepted' : room.rematchResponses[p.id] === false ? 'declined' : 'waiting')
+      : null
   }));
 }
 
@@ -117,6 +120,7 @@ function broadcastState(room) {
       yourHand: handsHidden ? null : (p.hand || []).slice().sort(cardSortKey),
       lastTrickWinnerId: room.lastTrickWinnerId || null,
       roundSummary: room.roundSummary || null,
+      rematchDeadline: room.rematchDeadline || null,
       log: room.log.slice(-8)
     };
     if (p.socketId) io.to(p.socketId).emit('state', payload);
@@ -421,6 +425,70 @@ function commitPlay(room, idx, card) {
   }
 }
 
+function endGameEarly(room, logMessage) {
+  room.phase = 'game_over';
+  room.turnIndex = null;
+  room.biddingIndex = null;
+  room.currentTrick = [];
+  addLog(room, logMessage);
+  broadcastState(room);
+}
+
+function startRematchVote(room) {
+  const hostPlayer = room.players[room.hostIndex];
+  room.rematchResponses = {};
+  for (const p of room.players) {
+    if (p.isBot) room.rematchResponses[p.id] = true;
+  }
+  room.rematchResponses[hostPlayer.id] = true; // host auto-accepts by starting the vote
+  room.rematchDeadline = Date.now() + 30000;
+  room.phase = 'rematch_pending';
+  addLog(room, `${hostPlayer.name} wants to start a new game — waiting up to 30s for everyone to accept.`);
+  broadcastState(room);
+  if (room.rematchTimer) clearTimeout(room.rematchTimer);
+  room.rematchTimer = setTimeout(() => finalizeRematch(room), 30000);
+}
+
+function checkRematchComplete(room) {
+  const allResponded = room.players.every(p => room.rematchResponses[p.id] !== undefined);
+  if (allResponded) {
+    if (room.rematchTimer) clearTimeout(room.rematchTimer);
+    finalizeRematch(room);
+  }
+}
+
+function finalizeRematch(room) {
+  if (room.phase !== 'rematch_pending') return;
+  const accepted = room.players.filter(p => room.rematchResponses[p.id] === true);
+  const declined = room.players.filter(p => room.rematchResponses[p.id] !== true);
+
+  for (const p of declined) {
+    if (p.socketId) {
+      io.to(p.socketId).emit('kicked', { message: "The new game started without you since you didn't accept in time." });
+      const s = io.sockets.sockets.get(p.socketId);
+      if (s) s.leave(room.code);
+    }
+  }
+
+  if (accepted.length < 2) {
+    room.rematchDeadline = null;
+    room.phase = 'game_over';
+    addLog(room, 'Not enough players accepted the rematch — staying on final scores.');
+    broadcastState(room);
+    return;
+  }
+
+  const oldHostId = room.players[room.hostIndex].id;
+  room.players = accepted.map(p => ({ ...p, hand: [], bid: undefined, tricksWon: 0, score: 0 }));
+  room.hostIndex = Math.max(0, room.players.findIndex(p => p.id === oldHostId));
+  room.rematchResponses = {};
+  room.rematchDeadline = null;
+  room.dealerIndex = Math.floor(Math.random() * room.players.length);
+  room.round = 1;
+  addLog(room, 'New game starting!');
+  startRound(room);
+}
+
 // ---------- Socket handling ----------
 
 io.on('connection', (socket) => {
@@ -527,6 +595,34 @@ io.on('connection', (socket) => {
     const idx = room.players.findIndex(p => p.id === socket.data.playerId);
     if (idx !== room.hostIndex) return;
     advanceToNextRound(room);
+  });
+
+  socket.on('end_game', () => {
+    const room = getRoom(socket);
+    if (!room) return;
+    const idx = room.players.findIndex(p => p.id === socket.data.playerId);
+    if (idx !== room.hostIndex) return socket.emit('error_message', { message: 'Only the host can end the game.' });
+    if (!['bidding', 'playing', 'scoring', 'round_end'].includes(room.phase)) return;
+    endGameEarly(room, `${room.players[idx].name} ended the game early.`);
+  });
+
+  socket.on('request_rematch', () => {
+    const room = getRoom(socket);
+    if (!room || room.phase !== 'game_over') return;
+    const idx = room.players.findIndex(p => p.id === socket.data.playerId);
+    if (idx !== room.hostIndex) return socket.emit('error_message', { message: 'Only the host can start a new game.' });
+    startRematchVote(room);
+  });
+
+  socket.on('rematch_response', ({ accept }) => {
+    const room = getRoom(socket);
+    if (!room || room.phase !== 'rematch_pending') return;
+    const idx = room.players.findIndex(p => p.id === socket.data.playerId);
+    if (idx < 0) return;
+    room.rematchResponses[room.players[idx].id] = !!accept;
+    addLog(room, `${room.players[idx].name} ${accept ? 'accepted' : 'declined'} the new game.`);
+    broadcastState(room);
+    checkRematchComplete(room);
   });
 
   socket.on('disconnect', () => {
