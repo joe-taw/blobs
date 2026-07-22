@@ -285,7 +285,7 @@
    Set this to your deployed backend's URL (e.g. from Render).
    While testing locally, http://localhost:3001 is fine.
 */
-const SERVER_URL = window.BLOBS_SERVER_URL || 'http://localhost:3001';
+const SERVER_URL = window.BLOBS_SERVER_URL || 'https://blobs.onrender.com';
 
 const socket = io(SERVER_URL, { transports: ['websocket', 'polling'] });
 
