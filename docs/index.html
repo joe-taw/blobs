@@ -15,8 +15,8 @@
     --bg:#1B120C;
     --surface:#2A1D14;
     --surface2:#3A2A1C;
-    --felt:#0B4D33;
-    --felt-dark:#052E1E;
+    --felt:#1B7A44;
+    --felt-dark:#0E4A29;
     --wood:#4A2F20;
     --lime:#D4AF37;
     --coral:#B33A3A;
@@ -115,10 +115,10 @@
   .table-area{
     position:relative;
     background:
-      radial-gradient(ellipse at 50% 35%, #146b45 0%, var(--felt) 55%, var(--felt-dark) 100%);
+      radial-gradient(ellipse at 50% 35%, #229955 0%, var(--felt) 55%, var(--felt-dark) 100%);
     border-radius:28px; padding:26px 26px 22px;
     border:10px solid var(--wood);
-    box-shadow:inset 0 0 60px rgba(0,0,0,0.45), 0 20px 50px rgba(0,0,0,0.5);
+    box-shadow:inset 0 0 60px rgba(0,0,0,0.35), 0 20px 50px rgba(0,0,0,0.5);
     min-height:420px; display:flex; flex-direction:column;
   }
 
@@ -136,9 +136,9 @@
   .seat{ overflow:visible; }
 
   /* face-down opponent cards */
-  .mini-hand{ display:flex; justify-content:center; margin-top:8px; height:30px; }
+  .mini-hand{ display:flex; justify-content:center; margin-top:8px; height:36px; }
   .card-back{
-    width:16px; height:24px; border-radius:4px; margin-left:-9px; flex-shrink:0;
+    width:20px; height:30px; border-radius:5px; margin-left:-11px; flex-shrink:0;
     background:
       repeating-linear-gradient(45deg, #7a1f1f 0px, #7a1f1f 3px, #932626 3px, #932626 6px),
       repeating-linear-gradient(-45deg, #7a1f1f 0px, #7a1f1f 3px, transparent 3px, transparent 6px);
@@ -194,18 +194,18 @@
   .trick-cards{ display:flex; gap:-10px; position:relative; z-index:1; flex-wrap:wrap; justify-content:center; }
 
   .card{
-    width:58px; height:82px; border-radius:8px; background:var(--cream); color:#1a1a1a;
+    width:73px; height:103px; border-radius:10px; background:var(--cream); color:#1a1a1a;
     display:flex; flex-direction:column; justify-content:space-between;
-    box-shadow:0 6px 14px rgba(0,0,0,0.45); position:relative;
-    font-family:'Inter',sans-serif; margin-left:-14px; transition:transform .15s ease;
-    border:1px solid rgba(0,0,0,0.15); padding:4px 5px;
+    box-shadow:0 7px 16px rgba(0,0,0,0.45); position:relative;
+    font-family:'Inter',sans-serif; margin-left:-18px; transition:transform .15s ease;
+    border:1px solid rgba(0,0,0,0.15); padding:5px 6px;
   }
   .card:first-child{ margin-left:0; }
   .card.red{ color:#B33A3A; }
-  .card .corner{ display:flex; flex-direction:column; align-items:center; line-height:1; font-weight:800; font-size:13px; width:14px; }
+  .card .corner{ display:flex; flex-direction:column; align-items:center; line-height:1; font-weight:800; font-size:16px; width:18px; }
   .card .corner.bottom{ align-self:flex-end; transform:rotate(180deg); }
-  .card .corner .pip{ font-size:12px; margin-top:1px; }
-  .card .center-pip{ position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:24px; }
+  .card .corner .pip{ font-size:15px; margin-top:1px; }
+  .card .center-pip{ position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:30px; }
   .trick-player-label{ font-size:10px; text-align:center; color:var(--cream); margin-top:4px; }
   .trick-card-col{ display:flex; flex-direction:column; align-items:center; }
 
@@ -245,12 +245,24 @@
   .miss{ color:var(--coral); font-weight:700; }
 
   .hidden{ display:none !important; }
+
+  /* ---------- Toast ---------- */
+  .toast{
+    position:fixed; left:50%; bottom:32px; transform:translateX(-50%) translateY(20px);
+    background:var(--coral); color:#fff; padding:14px 24px; border-radius:14px;
+    font-weight:700; font-size:15px; box-shadow:0 10px 30px rgba(0,0,0,0.5);
+    z-index:100; opacity:0; transition:opacity .25s ease, transform .25s ease; pointer-events:none;
+    border:1.5px solid rgba(255,255,255,0.15);
+  }
+  .toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
 </style>
 </head>
 <body>
 
 <div class="suit-watermark" style="top:-40px; left:-30px; font-size:340px;">♠</div>
 <div class="suit-watermark" style="bottom:-80px; right:-50px; font-size:380px;">♥</div>
+
+<div class="toast" id="toast"></div>
 
 <!-- ============ AUTH / LOBBY SCREEN ============ -->
 <div id="authScreen" class="screen">
@@ -515,6 +527,15 @@ function renderEmoteBar(){
 }
 
 /* ---------- End game / rematch ---------- */
+let toastTimeout = null;
+function showToast(message){
+  const el = $('toast');
+  el.textContent = message;
+  el.classList.add('show');
+  if (toastTimeout) clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
 let rematchInterval = null;
 
 function startRematchCountdown(deadline){
@@ -716,8 +737,13 @@ function renderGame(state){
       const btn = document.createElement('button');
       btn.className = 'bid-btn';
       btn.textContent = i;
-      btn.disabled = (i === state.forbiddenBid);
-      btn.onclick = () => socket.emit('submit_bid', { bid: i });
+      btn.onclick = () => {
+        if (i === state.forbiddenBid) {
+          showToast("No no no… can't select that number!");
+        } else {
+          socket.emit('submit_bid', { bid: i });
+        }
+      };
       bidControls.appendChild(btn);
     }
   } else {
