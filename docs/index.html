@@ -116,11 +116,22 @@
     position:relative;
     background:
       radial-gradient(ellipse at 50% 35%, #229955 0%, var(--felt) 55%, var(--felt-dark) 100%);
-    border-radius:28px; padding:26px 26px 22px;
+    border-radius:28px; padding:0;
     border:10px solid var(--wood);
     box-shadow:inset 0 0 60px rgba(0,0,0,0.35), 0 20px 50px rgba(0,0,0,0.5);
-    min-height:420px; display:flex; flex-direction:column;
+    min-height:420px; display:flex; flex-direction:row; align-items:stretch;
   }
+  .table-content{ flex:1; min-width:0; display:flex; flex-direction:column; padding:26px 26px 22px; }
+  .trump-side-strip{
+    flex-shrink:0; width:48px; display:flex; align-items:center; justify-content:center;
+    writing-mode:vertical-rl; text-orientation:mixed; transform:rotate(180deg);
+    font-family:'Cinzel'; font-weight:700; font-size:16px; letter-spacing:1.5px;
+    background:rgba(0,0,0,0.28); color:var(--lime); padding:20px 0;
+    border-right:2px solid rgba(212,175,55,0.35);
+  }
+  .trump-side-strip.red{ color:#e8a3a3; }
+  .trump-side-strip.black{ color:#a9c6e3; }
+  .trump-side-strip.none{ color:var(--muted); }
 
   .seats{ display:flex; flex-wrap:wrap; gap:10px; justify-content:center; margin-bottom:18px; }
   .seat{
@@ -320,6 +331,17 @@
       <input type="checkbox" id="cheatToggle" style="width:18px; height:18px;" />
       <label for="cheatToggle" style="margin:0; font-size:13px; color:var(--cream);">Allow cheating (players can skip following suit — but can be caught)</label>
     </div>
+    <div class="divider" id="simDivider" style="display:none;">or</div>
+    <div id="simulateToggleWrap" class="hidden" style="display:flex; align-items:center; gap:10px;">
+      <input type="checkbox" id="simulateToggle" style="width:18px; height:18px;" />
+      <label for="simulateToggle" style="margin:0; font-size:13px; color:var(--cream);">Run a simulation — just watch computers play each other</label>
+    </div>
+    <div id="simTotalWrap" class="hidden">
+      <label for="simTotalSelect" style="margin-top:14px;">Number of computer players</label>
+      <select id="simTotalSelect" style="width:100%; padding:12px 14px; border-radius:14px; border:1.5px solid rgba(255,255,255,0.08); background:var(--surface2); color:var(--cream); font-size:15px; font-family:'Inter',sans-serif;">
+        <option value="2">2</option><option value="3">3</option><option value="4" selected>4</option><option value="5">5</option><option value="6">6</option>
+      </select>
+    </div>
     <button class="btn-primary" id="startGameBtn">Start Game</button>
     <p style="color:var(--muted); font-size:12px; text-align:center; margin-top:10px;" id="hostHint"></p>
   </div>
@@ -332,26 +354,28 @@
       <div><div class="num" id="roundNum">1</div><div class="lbl">of 16</div></div>
       <div><div class="num" id="cardsThisRound" style="font-size:18px;">7</div><div class="lbl">cards</div></div>
     </div>
-    <div class="trump-pill none" id="trumpPill">No trump yet</div>
     <button class="btn-secondary hidden" id="endGameBtn" style="width:auto; margin-top:0; padding:8px 16px; font-size:12.5px;">End Game</button>
     <div class="room-code-pill" style="font-size:14px; padding:6px 12px;" id="roomCodePillGame">----</div>
   </div>
 
   <div class="board">
     <div class="table-area">
-      <div class="seats" id="seatsRow"></div>
+      <div class="trump-side-strip none" id="trumpSideStrip">No trump yet</div>
+      <div class="table-content">
+        <div class="seats" id="seatsRow"></div>
 
-      <div class="trick-blob-wrap">
-        <div class="trick-blob"></div>
-        <div class="trick-cards" id="trickCards"></div>
+        <div class="trick-blob-wrap">
+          <div class="trick-blob"></div>
+          <div class="trick-cards" id="trickCards"></div>
+        </div>
+
+        <div class="status-line" id="statusLine">Connecting…</div>
+
+        <div class="bid-controls hidden" id="bidControls"></div>
+
+        <div class="hand-row" id="handRow"></div>
+        <div class="emote-bar" id="emoteBar"></div>
       </div>
-
-      <div class="status-line" id="statusLine">Connecting…</div>
-
-      <div class="bid-controls hidden" id="bidControls"></div>
-
-      <div class="hand-row" id="handRow"></div>
-      <div class="emote-bar" id="emoteBar"></div>
     </div>
 
     <div class="sidebar">
@@ -596,7 +620,7 @@ function renderRematchList(state){
     const chip = document.createElement('div');
     chip.className = 'player-chip';
     chip.style.marginBottom = '8px';
-    chip.innerHTML = `${iconFor(p.rematchStatus)} ${p.isBot ? '🤖 ' : ''}${p.name}${p.id===myId?' (you)':''}`;
+    chip.innerHTML = `${iconFor(p.rematchStatus)} ${p.isBot ? '🤖 ' : (p.isAuto ? '🎮 ' : '')}${p.name}${p.id===myId?' (you)':''}`;
     list.appendChild(chip);
   });
 }
@@ -642,6 +666,7 @@ function renderLobby(state){
   const me = state.players.find(p => p.id === myId);
   const startBtn = $('startGameBtn');
   const botWrap = $('botSelectorWrap');
+  const simulateChecked = $('simulateToggle').checked;
   if (me && me.isHost) {
     startBtn.style.display = 'block';
     const maxBots = Math.max(0, Math.min(5, 6 - state.players.length));
@@ -655,24 +680,46 @@ function renderLobby(state){
       select.appendChild(opt);
     }
     if (prevVal && Number(prevVal) <= maxBots) select.value = prevVal;
-    if (maxBots > 0) show('botSelectorWrap'); else hide('botSelectorWrap');
-    show('cheatToggleWrap');
-    startBtn.disabled = (state.players.length + Number(select.value)) < 2;
-    $('hostHint').textContent = (state.players.length + Number(select.value)) < 2
-      ? 'Add at least one computer opponent, or wait for another player to join.'
-      : 'You\'re the host — start whenever ready.';
+    show('simulateToggleWrap');
+    show('simDivider');
+    $('simDivider').style.display = 'flex';
+
+    if (simulateChecked) {
+      hide('botSelectorWrap');
+      hide('cheatToggleWrap');
+      show('simTotalWrap');
+      startBtn.disabled = false;
+      $('hostHint').textContent = "Simulation mode — sit back and watch the computers play.";
+    } else {
+      if (maxBots > 0) show('botSelectorWrap'); else hide('botSelectorWrap');
+      show('cheatToggleWrap');
+      hide('simTotalWrap');
+      startBtn.disabled = (state.players.length + Number(select.value)) < 2;
+      $('hostHint').textContent = (state.players.length + Number(select.value)) < 2
+        ? 'Add at least one computer opponent, or wait for another player to join.'
+        : 'You\'re the host — start whenever ready.';
+    }
   } else {
     startBtn.style.display = 'none';
     hide('botSelectorWrap');
     hide('cheatToggleWrap');
+    hide('simulateToggleWrap');
+    hide('simTotalWrap');
+    hide('simDivider');
     $('hostHint').textContent = 'Waiting for the host to start the game…';
   }
 }
 $('botCountSelect').onchange = () => { if (currentState) renderLobby(currentState); };
+$('simulateToggle').onchange = () => { if (currentState) renderLobby(currentState); };
 $('startGameBtn').onclick = () => {
-  const botCount = Number($('botCountSelect').value || 0);
-  const cheatingEnabled = $('cheatToggle').checked;
-  socket.emit('start_game', { botCount, cheatingEnabled });
+  if ($('simulateToggle').checked) {
+    const simTotal = Number($('simTotalSelect').value || 4);
+    socket.emit('start_game', { simulateAll: true, simTotal });
+  } else {
+    const botCount = Number($('botCountSelect').value || 0);
+    const cheatingEnabled = $('cheatToggle').checked;
+    socket.emit('start_game', { botCount, cheatingEnabled });
+  }
 };
 
 function renderGame(state){
@@ -685,16 +732,16 @@ function renderGame(state){
     $('cardsThisRound').textContent = state.round.cards;
   }
 
-  const pill = $('trumpPill');
+  const strip = $('trumpSideStrip');
   if (state.trumpSuit) {
-    pill.textContent = `Trump: ${SUIT_SYMBOL[state.trumpSuit]} ${SUIT_NAME[state.trumpSuit]}`;
-    pill.className = 'trump-pill ' + (RED_SUITS.includes(state.trumpSuit) ? 'red' : 'black');
+    strip.textContent = `Trumps are ${SUIT_SYMBOL[state.trumpSuit]} ${SUIT_NAME[state.trumpSuit]}`;
+    strip.className = 'trump-side-strip ' + (RED_SUITS.includes(state.trumpSuit) ? 'red' : 'black');
   } else if (state.round && !state.round.hasTrump) {
-    pill.textContent = 'No trump this round';
-    pill.className = 'trump-pill none';
+    strip.textContent = 'No trump this round';
+    strip.className = 'trump-side-strip none';
   } else {
-    pill.textContent = 'Trump not drawn yet';
-    pill.className = 'trump-pill none';
+    strip.textContent = 'Trump not drawn yet';
+    strip.className = 'trump-side-strip none';
   }
 
   // Seats
@@ -706,7 +753,7 @@ function renderGame(state){
     seat.dataset.playerId = p.id;
     const bidTxt = p.bid === null || p.bid === undefined ? '–' : p.bid;
     seat.innerHTML = `
-      <div class="name">${p.isBot ? '🤖 ' : ''}${p.name}${p.id===myId?' (you)':''}</div>
+      <div class="name">${p.isBot ? '🤖 ' : (p.isAuto ? '🎮 ' : '')}${p.name}${p.id===myId?' (you)':''}</div>
       <div class="meta">
         <span class="bid-num">bid ${bidTxt}</span>
         <span>won ${p.tricksWon}</span>
@@ -836,7 +883,7 @@ function renderGame(state){
     row.className = 'lb-row';
     const bidTxt = p.bid === null || p.bid === undefined ? '–' : p.bid;
     row.innerHTML = `
-      <span class="lb-name">${p.isBot ? '🤖 ' : ''}${p.name}${p.id===myId?' (you)':''}${p.id===state.dealerId?'<span class="lb-dealer-tag">DEALER</span>':''}</span>
+      <span class="lb-name">${p.isBot ? '🤖 ' : (p.isAuto ? '🎮 ' : '')}${p.name}${p.id===myId?' (you)':''}${p.id===state.dealerId?'<span class="lb-dealer-tag">DEALER</span>':''}</span>
       <span class="lb-val">${bidTxt}</span>
       <span class="lb-val">${p.tricksWon}</span>
       <span class="lb-val" style="font-family:'Cinzel'; font-weight:800; color:var(--lime);">${p.score}</span>`;
@@ -886,7 +933,7 @@ function renderGame(state){
     const sorted = state.players.slice().sort((a,b)=>b.score-a.score);
     $('gameOverBody').innerHTML = sorted.map((p,i) => `
       <div class="summary-row">
-        <span>${i===0?'🏆 ':''}${p.isBot ? '🤖 ' : ''}${p.name}${p.id===myId?' (you)':''}</span>
+        <span>${i===0?'🏆 ':''}${p.isBot ? '🤖 ' : (p.isAuto ? '🎮 ' : '')}${p.name}${p.id===myId?' (you)':''}</span>
         <span class="val" style="font-family:'Cinzel'; font-weight:800; color:var(--lime);">${p.score}</span>
       </div>`).join('');
     const rematchBtn = $('rematchBtn');

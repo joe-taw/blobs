@@ -80,6 +80,7 @@ function publicPlayers(room) {
     name: p.name,
     connected: p.connected,
     isBot: !!p.isBot,
+    isAuto: !!p.isAuto,
     isHost: i === room.hostIndex,
     isDealer: i === room.dealerIndex,
     handCount: p.hand ? p.hand.length : 0,
@@ -311,7 +312,7 @@ function botDecideCard(room, playerIndex) {
 function maybeTriggerBot(room) {
   if (room.phase === 'bidding' && room.biddingIndex != null) {
     const p = room.players[room.biddingIndex];
-    if (p && p.isBot) {
+    if (p && (p.isBot || p.isAuto)) {
       const idx = room.biddingIndex;
       setTimeout(() => {
         if (room.phase !== 'bidding' || room.biddingIndex !== idx) return;
@@ -320,7 +321,7 @@ function maybeTriggerBot(room) {
     }
   } else if (room.phase === 'playing' && room.turnIndex != null) {
     const p = room.players[room.turnIndex];
-    if (p && p.isBot) {
+    if (p && (p.isBot || p.isAuto)) {
       const idx = room.turnIndex;
       setTimeout(() => {
         if (room.phase !== 'playing' || room.turnIndex !== idx) return;
@@ -539,20 +540,27 @@ io.on('connection', (socket) => {
     broadcastState(room);
   }
 
-  socket.on('start_game', ({ botCount, cheatingEnabled } = {}) => {
+  socket.on('start_game', ({ botCount, cheatingEnabled, simulateAll, simTotal } = {}) => {
     const room = getRoom(socket);
     if (!room) return;
     const idx = room.players.findIndex(p => p.id === socket.data.playerId);
     if (idx !== room.hostIndex) return socket.emit('error_message', { message: 'Only the host can start the game.' });
 
-    const bots = Math.max(0, Math.min(5, Number(botCount) || 0));
-    const humanCount = room.players.length;
-    if (humanCount + bots < 2) return socket.emit('error_message', { message: 'Need at least 2 players total.' });
-    if (humanCount + bots > 6) return socket.emit('error_message', { message: 'A maximum of 6 players total (humans + computer opponents).' });
+    if (simulateAll) {
+      room.players.forEach(p => { p.isAuto = true; });
+      const total = Math.max(room.players.length, Math.max(2, Math.min(6, Number(simTotal) || 6)));
+      const botsNeeded = total - room.players.length;
+      for (let i = 0; i < botsNeeded; i++) room.players.push(makeBot(i));
+      room.cheatingEnabled = false;
+    } else {
+      const bots = Math.max(0, Math.min(5, Number(botCount) || 0));
+      const humanCount = room.players.length;
+      if (humanCount + bots < 2) return socket.emit('error_message', { message: 'Need at least 2 players total.' });
+      if (humanCount + bots > 6) return socket.emit('error_message', { message: 'A maximum of 6 players total (humans + computer opponents).' });
+      for (let i = 0; i < bots; i++) room.players.push(makeBot(i));
+      room.cheatingEnabled = !!cheatingEnabled;
+    }
 
-    for (let i = 0; i < bots; i++) room.players.push(makeBot(i));
-
-    room.cheatingEnabled = !!cheatingEnabled;
     room.dealerIndex = Math.floor(Math.random() * room.players.length);
     room.round = 1;
     startRound(room);
