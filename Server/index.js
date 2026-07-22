@@ -44,6 +44,7 @@ const ROUNDS = [
 ];
 
 const rooms = {}; // roomCode -> room state
+const EMOTE_PHRASES = ['I was alright', 'Fence Sitter'];
 
 function rankLabel(r) { return RANK_NAME[r] || String(r); }
 function cardLabel(c) { return `${rankLabel(c.rank)}${c.suit}`; }
@@ -228,7 +229,10 @@ function resolveTrick(room) {
 
   const cardsLeft = winnerPlayer.hand.length;
   if (cardsLeft === 0) {
-    finishRound(room);
+    room.phase = 'scoring';
+    room.turnIndex = null;
+    broadcastState(room);
+    setTimeout(() => finishRound(room), 4000);
   } else {
     room.turnIndex = winnerIndex;
     broadcastState(room);
@@ -367,6 +371,14 @@ io.on('connection', (socket) => {
       room.turnIndex = nextIndex(room, room.turnIndex);
       broadcastState(room);
     }
+  });
+
+  socket.on('send_emote', ({ phrase }) => {
+    const room = getRoom(socket);
+    if (!room || !EMOTE_PHRASES.includes(phrase)) return;
+    const player = room.players.find(p => p.id === socket.data.playerId);
+    if (!player) return;
+    io.to(room.code).emit('emote', { playerId: player.id, phrase });
   });
 
   socket.on('next_round', () => {

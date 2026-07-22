@@ -123,6 +123,54 @@
   .seat .name{ font-weight:700; font-size:13px; }
   .seat .meta{ font-size:11px; color:var(--muted); margin-top:4px; display:flex; gap:8px; justify-content:center; }
   .seat .bid-num{ color:var(--lime); font-weight:800; }
+  .seat{ overflow:visible; }
+
+  /* face-down opponent cards */
+  .mini-hand{ display:flex; justify-content:center; margin-top:8px; height:30px; }
+  .card-back{
+    width:16px; height:24px; border-radius:4px; margin-left:-9px; flex-shrink:0;
+    background:
+      repeating-linear-gradient(135deg, #6f7ae0 0px, #6f7ae0 3px, #7d87e8 3px, #7d87e8 6px);
+    border:1.5px solid rgba(245,243,238,0.55);
+    box-shadow:0 3px 6px rgba(0,0,0,0.35);
+    transform-origin:bottom center;
+  }
+  .card-back:first-child{ margin-left:0; }
+
+  /* speech bubbles */
+  .speech-bubble{
+    position:absolute; bottom:calc(100% + 8px); left:50%; transform:translateX(-50%);
+    background:var(--cream); color:#1a1a2e; padding:8px 14px; border-radius:14px;
+    font-size:12.5px; font-weight:700; white-space:nowrap; box-shadow:0 8px 18px rgba(0,0,0,0.35);
+    animation:bubbleIn .18s ease-out; z-index:5;
+  }
+  .speech-bubble::after{
+    content:''; position:absolute; top:100%; left:50%; transform:translateX(-50%);
+    border:6px solid transparent; border-top-color:var(--cream);
+  }
+  @keyframes bubbleIn{ from{ opacity:0; transform:translateX(-50%) translateY(6px) scale(0.9);} to{ opacity:1; transform:translateX(-50%) translateY(0) scale(1);} }
+
+  .emote-bar{ display:flex; gap:8px; justify-content:center; margin-top:14px; flex-wrap:wrap; }
+  .emote-btn{
+    padding:8px 14px; border-radius:999px; background:var(--surface2); color:var(--cream);
+    font-size:12.5px; font-weight:600; border:1.5px solid rgba(255,255,255,0.1);
+  }
+  .emote-btn:hover{ border-color:var(--peri); }
+
+  /* leaderboard */
+  .lb-row{ display:grid; grid-template-columns:1fr auto auto auto; gap:10px; align-items:center; padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.05); font-size:13px; }
+  .lb-row:last-child{ border-bottom:none; }
+  .lb-name{ display:flex; align-items:center; gap:6px; font-weight:600; }
+  .lb-dealer-tag{ font-size:9px; background:var(--peri); color:#14152B; padding:2px 6px; border-radius:6px; font-weight:800; letter-spacing:0.5px; }
+  .lb-col-lbl{ font-size:9px; color:var(--muted); text-transform:uppercase; text-align:center; }
+  .lb-val{ font-size:13px; text-align:center; min-width:26px; }
+  .lb-header{ display:grid; grid-template-columns:1fr auto auto auto; gap:10px; margin-bottom:2px; }
+
+  .scoring-banner{ text-align:center; padding:10px; color:var(--lime); font-weight:700; font-size:14px; }
+  .scoring-banner .dots span{ animation:blink 1.2s infinite; }
+  .scoring-banner .dots span:nth-child(2){ animation-delay:.2s; }
+  .scoring-banner .dots span:nth-child(3){ animation-delay:.4s; }
+  @keyframes blink{ 0%,100%{opacity:.2;} 50%{opacity:1;} }
 
   .trick-blob-wrap{ flex:1; display:flex; align-items:center; justify-content:center; position:relative; min-height:200px; }
   .trick-blob{ position:absolute; width:280px; height:220px; opacity:0.5; animation:breathe 5s ease-in-out infinite; }
@@ -248,11 +296,18 @@
       <div class="bid-controls hidden" id="bidControls"></div>
 
       <div class="hand-row" id="handRow"></div>
+      <div class="emote-bar" id="emoteBar"></div>
     </div>
 
     <div class="sidebar">
       <div class="panel">
-        <h3>Scores</h3>
+        <h3>Leaderboard</h3>
+        <div class="lb-header">
+          <span></span>
+          <span class="lb-col-lbl">Bid</span>
+          <span class="lb-col-lbl">Won</span>
+          <span class="lb-col-lbl">Score</span>
+        </div>
         <div id="scoreList"></div>
       </div>
       <div class="panel log-panel" id="logPanel">
@@ -285,7 +340,7 @@
    Set this to your deployed backend's URL (e.g. from Render).
    While testing locally, http://localhost:3001 is fine.
 */
-const SERVER_URL = window.BLOBS_SERVER_URL || 'https://blobs.onrender.com';
+const SERVER_URL = window.BLOBS_SERVER_URL || 'http://localhost:3001';
 
 const socket = io(SERVER_URL, { transports: ['websocket', 'polling'] });
 
@@ -296,6 +351,23 @@ const RED_SUITS = ['H','D'];
 let myId = null;
 let currentState = null;
 let selectedBid = null;
+const activeBubbles = {}; // playerId -> timeout id
+const EMOTE_PHRASES = ['I was alright', 'Fence Sitter'];
+
+function cardBackFan(count){
+  const wrap = document.createElement('div');
+  wrap.className = 'mini-hand';
+  const n = Math.min(count, 10);
+  for (let i = 0; i < n; i++) {
+    const back = document.createElement('div');
+    back.className = 'card-back';
+    const angle = (i - (n - 1) / 2) * 7;
+    const lift = Math.abs(i - (n - 1) / 2) * 1.5;
+    back.style.transform = `rotate(${angle}deg) translateY(${lift}px)`;
+    wrap.appendChild(back);
+  }
+  return wrap;
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -330,6 +402,42 @@ socket.on('joined', ({ roomCode, playerId }) => {
   myId = playerId;
   hide('authScreen');
 });
+
+/* ---------- Table talk / emotes ---------- */
+socket.on('emote', ({ playerId, phrase }) => {
+  if (activeBubbles[playerId]) clearTimeout(activeBubbles[playerId].timeoutId);
+  const timeoutId = setTimeout(() => {
+    delete activeBubbles[playerId];
+    const el = document.querySelector(`.seat[data-player-id="${playerId}"] .speech-bubble`);
+    if (el) el.remove();
+  }, 4000);
+  activeBubbles[playerId] = { phrase, timeoutId };
+  showBubbleOnSeat(playerId, phrase);
+});
+
+function showBubbleOnSeat(playerId, phrase){
+  const seatEl = document.querySelector(`.seat[data-player-id="${playerId}"]`);
+  if (!seatEl) return;
+  let bubble = seatEl.querySelector('.speech-bubble');
+  if (!bubble) {
+    bubble = document.createElement('div');
+    bubble.className = 'speech-bubble';
+    seatEl.appendChild(bubble);
+  }
+  bubble.textContent = phrase;
+}
+
+function renderEmoteBar(){
+  const bar = $('emoteBar');
+  bar.innerHTML = '';
+  EMOTE_PHRASES.forEach(phrase => {
+    const btn = document.createElement('button');
+    btn.className = 'emote-btn';
+    btn.textContent = phrase;
+    btn.onclick = () => socket.emit('send_emote', { phrase });
+    bar.appendChild(btn);
+  });
+}
 
 /* ---------- State rendering ---------- */
 socket.on('state', (state) => {
@@ -368,6 +476,7 @@ $('startGameBtn').onclick = () => socket.emit('start_game');
 function renderGame(state){
   $('roomCodePillGame').textContent = state.roomCode;
   hide('roundEndModal'); hide('gameOverModal');
+  renderEmoteBar();
 
   if (state.round) {
     $('roundNum').textContent = state.round.number;
@@ -392,15 +501,17 @@ function renderGame(state){
   state.players.forEach(p => {
     const seat = document.createElement('div');
     seat.className = 'seat' + (p.id === state.turnPlayerId || p.id === state.biddingPlayerId ? ' active-turn' : '') + (p.id === state.dealerId ? ' dealer' : '');
+    seat.dataset.playerId = p.id;
     const bidTxt = p.bid === null || p.bid === undefined ? '–' : p.bid;
     seat.innerHTML = `
       <div class="name">${p.name}${p.id===myId?' (you)':''}</div>
       <div class="meta">
-        <span>🂠 ${p.handCount}</span>
         <span class="bid-num">bid ${bidTxt}</span>
         <span>won ${p.tricksWon}</span>
       </div>`;
+    if (p.id !== myId) seat.appendChild(cardBackFan(p.handCount));
     seatsRow.appendChild(seat);
+    if (activeBubbles[p.id]) showBubbleOnSeat(p.id, activeBubbles[p.id].phrase);
   });
 
   // Trick area
@@ -431,8 +542,25 @@ function renderGame(state){
     const isMine = state.turnPlayerId === myId;
     statusLine.textContent = isMine ? "Your turn — play a card." : `Waiting for ${turnPlayer ? turnPlayer.name : '…'}…`;
     statusLine.className = 'status-line' + (isMine ? ' mine' : '');
+  } else if (state.phase === 'scoring') {
+    statusLine.innerHTML = '';
+    statusLine.className = 'status-line';
   } else {
     statusLine.textContent = '';
+  }
+
+  // Scoring banner (last trick's dust settling before totals reveal)
+  let scoringBanner = document.getElementById('scoringBanner');
+  if (state.phase === 'scoring') {
+    if (!scoringBanner) {
+      scoringBanner = document.createElement('div');
+      scoringBanner.id = 'scoringBanner';
+      scoringBanner.className = 'scoring-banner';
+      scoringBanner.innerHTML = 'Calculating scores<span class="dots"><span>.</span><span>.</span><span>.</span></span>';
+      statusLine.insertAdjacentElement('afterend', scoringBanner);
+    }
+  } else if (scoringBanner) {
+    scoringBanner.remove();
   }
 
   // Bid controls
@@ -484,13 +612,18 @@ function renderGame(state){
     handRow.appendChild(note);
   }
 
-  // Scores
+  // Leaderboard
   const scoreList = $('scoreList');
   scoreList.innerHTML = '';
   state.players.slice().sort((a,b)=>b.score-a.score).forEach(p => {
     const row = document.createElement('div');
-    row.className = 'score-row';
-    row.innerHTML = `<span>${p.name}${p.id===myId?' (you)':''}</span><span class="val">${p.score}</span>`;
+    row.className = 'lb-row';
+    const bidTxt = p.bid === null || p.bid === undefined ? '–' : p.bid;
+    row.innerHTML = `
+      <span class="lb-name">${p.name}${p.id===myId?' (you)':''}${p.id===state.dealerId?'<span class="lb-dealer-tag">DEALER</span>':''}</span>
+      <span class="lb-val">${bidTxt}</span>
+      <span class="lb-val">${p.tricksWon}</span>
+      <span class="lb-val" style="font-family:'Baloo 2'; font-weight:800; color:var(--lime);">${p.score}</span>`;
     scoreList.appendChild(row);
   });
 
